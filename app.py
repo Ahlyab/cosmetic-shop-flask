@@ -8,6 +8,7 @@ from flask_cors import CORS
 from sqlalchemy.dialects.sqlite import JSON
 import json
 from flask_migrate import Migrate
+import openai
 
 app = Flask(__name__)
 # change to secure key in prod
@@ -21,6 +22,10 @@ CORS(app, supports_credentials=True)
 # Stripe config - set your stripe keys here or via environment variables
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY")
+
+# OpenAI config - set your OpenAI API key here or via environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
@@ -466,6 +471,92 @@ def refund_transaction(transaction_id):
         transaction.refund_id = refund.id
         db.session.commit()
         return jsonify({'message': 'Refund successful', 'refund_id': refund.id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai-recommendations', methods=['POST'])
+def ai_recommendations():
+    data = request.json
+    user_info = data.get('user_info')
+    # Only get the first 20 products and only essential fields
+    products = Product.query.limit(20).all()
+    products_list = [
+        {
+            'id': p.id,
+            'name': p.name,
+            'brand': p.brand,
+            'price': p.price,
+            'category': p.category,
+            'badge': p.badge,
+            'skinType': p.skinType,
+            'concerns': p.concerns,
+        }
+        for p in products
+    ]
+    if not user_info or not products_list:
+        return jsonify({'error': 'Missing user_info or products'}), 400
+
+    system_prompt = f"""
+You are a helpful beauty consultant AI. Consider the preferences of the user and the following product list to recommend the best products.
+
+Product list:
+{json.dumps(products_list, indent=2)}
+"""
+    user_prompt = f"""
+Based on the user's profile, recommend the top 3 products and explain why for each. Return a JSON array of objects with fields: product_id, reason, and matchScore (0-100).
+
+User profile:
+{json.dumps(user_info, indent=2)}
+
+Respond with only the JSON array.
+"""
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0.7,
+        )
+        # Extract the JSON from the response
+        import re
+        import ast
+        content = response.choices[0].message.content
+        # Try to extract JSON array from the response
+        match = re.search(r'(\[.*\])', content, re.DOTALL)
+        if match:
+            recommendations = ast.literal_eval(match.group(1))
+        else:
+            recommendations = []
+
+        # Fetch product details for each recommended product_id
+        recs_with_products = []
+        for rec in recommendations:
+            product = Product.query.get(rec.get('product_id'))
+            if product:
+                product_dict = {
+                    'id': product.id,
+                    'name': product.name,
+                    'brand': product.brand,
+                    'price': product.price,
+                    'originalPrice': product.originalPrice,
+                    'image_url': product.image_url,
+                    'badge': product.badge,
+                    'badgeColor': product.badgeColor,
+                    'category': product.category,
+                    'concerns': product.concerns,
+                    'description': product.description,
+                    'ingredients': product.ingredients,
+                    'howToUse': product.howToUse,
+                    'benefits': product.benefits,
+                    'skinType': product.skinType,
+                }
+                recs_with_products.append({
+                    'product': product_dict,
+                    'reason': rec.get('reason'),
+                    'matchScore': rec.get('matchScore'),
+                })
+        return jsonify({'recommendations': recs_with_products})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -8,3 +8,4 @@ wtforms
 stripe
 email_validator
 python-dotenv
+openai
