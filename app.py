@@ -265,20 +265,20 @@ def create_checkout_session():
     line_items = []
     for item in cart_items:
         product = Product.query.get(item.get('id'))
-    if not product:
-        return jsonify({'error': f'Invalid product ID: {item.get("id")}'}), 400
-    line_items.append({
-        'price_data': {
-            'currency': 'usd',
-            'unit_amount': int(product.price * 100),
-            'product_data': {
-                        'name': product.name,
-                        'description': product.description or '',
-                        'images': [product.image_url] if product.image_url else [],
+        if not product:
+            return jsonify({'error': f'Invalid product ID: {item.get("id")}'}), 400
+        line_items.append({
+            'price_data': {
+                'currency': 'usd',
+                'unit_amount': int(product.price * 100),
+                'product_data': {
+                    'name': product.name,
+                    'description': product.description or '',
+                    'images': [product.image_url] if product.image_url else [],
+                },
             },
-        },
-        'quantity': item.get('quantity', 1),
-    })
+            'quantity': item.get('quantity', 1),
+        })
     product_ids = ','.join(str(item['id']) for item in cart_items)
     quantities = ','.join(str(item['quantity']) for item in cart_items)
     metadata = {
@@ -559,6 +559,56 @@ Respond with only the JSON array.
         return jsonify({'recommendations': recs_with_products})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai-chat', methods=['POST'])
+def ai_chat():
+    data = request.json
+    messages = data.get('messages')
+    if not messages or not isinstance(messages, list):
+        return jsonify({'error': 'Missing or invalid messages'}), 400
+
+    # System prompt for the chatbot
+    system_prompt = (
+        "You are a helpful, friendly, and knowledgeable beauty and health consultant AI. "
+        "You can answer questions about skincare, health, and beauty routines. "
+        "Always provide clear, safe, and practical advice. If a question is medical in nature, remind the user to consult a healthcare professional."
+    )
+    openai_messages = [
+        {"role": "system", "content": system_prompt}
+    ] + messages
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=openai_messages,
+            temperature=0.7,
+        )
+        content = response.choices[0].message.content
+        return jsonify({'reply': content})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/history', methods=['GET'])
+@login_required
+def user_history():
+    transactions = Transaction.query.filter_by(
+        user_id=current_user.id).order_by(Transaction.created_at.desc()).all()
+    result = []
+    for t in transactions:
+        product = Product.query.get(t.product_id)
+        result.append({
+            'id': t.id,
+            'product_name': product.name if product else None,
+            'product_image_url': product.image_url if product else None,
+            'product_price': product.price if product else None,
+            'amount': t.amount,
+            'currency': t.currency,
+            'status': t.status,
+            'created_at': t.created_at,
+            'stripe_session_id': t.stripe_session_id,
+        })
+    return jsonify(result)
 
 # Error handlers
 
